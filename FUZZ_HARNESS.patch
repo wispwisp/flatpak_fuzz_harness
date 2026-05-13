@@ -1,0 +1,1364 @@
+diff --git a/Makefile.am b/Makefile.am
+index 806984a..f9622c1 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -112,6 +112,7 @@ include revokefs/Makefile.am.inc
+ include selinux/Makefile.am.inc
+ include sideload-repos-systemd/Makefile.am.inc
+ include tests/Makefile.am.inc
++include fuzz/Makefile.am.inc
+ 
+ if !WITH_SYSTEM_DBUS_PROXY
+ libexec_PROGRAMS+=flatpak-dbus-proxy
+diff --git a/configure b/configure
+index f918e76..ffe3bc2 100755
+--- a/configure
++++ b/configure
+@@ -728,6 +728,8 @@ SYSTEM_HELPER_USER
+ sysusersdir
+ RUN_MEDIA_DIR
+ SYSTEM_INSTALL_DIR
++ENABLE_FUZZING_FALSE
++ENABLE_FUZZING_TRUE
+ ENABLE_ASAN_FALSE
+ ENABLE_ASAN_TRUE
+ SUDO_BIN
+@@ -1001,6 +1003,7 @@ enable_seccomp
+ with_priv_mode
+ enable_sudo
+ enable_asan
++enable_fuzzing
+ with_system_install_dir
+ with_run_media_dir
+ with_sysusersdir
+@@ -1741,6 +1744,8 @@ Optional Features:
+   --enable-sudo           Use sudo to set setuid flags on binaries during
+                           install (only needed if userns disabled)
+   --enable-asan           Use build with address sanitazion
++  --enable-fuzzing        Build AFL++ fuzzing harnesses (requires
++                          CC=afl-clang-fast)
+   --enable-documentation  Build documentation
+   --enable-introspection=[no/auto/yes]
+                           Enable introspection for this build
+@@ -20440,6 +20445,46 @@ fi
+ 
+ 
+ 
++# Check whether --enable-fuzzing was given.
++if test ${enable_fuzzing+y}
++then :
++  enableval=$enable_fuzzing;
++else $as_nop
++  enable_fuzzing=no
++fi
++
++if test "x$enable_fuzzing" = xyes ; then
++   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC is an AFL++ compiler" >&5
++printf %s "checking whether $CC is an AFL++ compiler... " >&6; }
++   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++#ifndef __AFL_COMPILER
++#error not an AFL compiler
++#endif
++_ACEOF
++if ac_fn_c_try_cpp "$LINENO"
++then :
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
++printf "%s\n" "yes" >&6; }
++else $as_nop
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
++printf "%s\n" "no" >&6; }
++   as_fn_error $? "--enable-fuzzing requires CC=afl-clang-fast (or afl-clang-lto). Re-run configure with CC set appropriately." "$LINENO" 5
++fi
++rm -f conftest.err conftest.i conftest.$ac_ext
++fi
++
++ if test "x$enable_fuzzing" = xyes; then
++  ENABLE_FUZZING_TRUE=
++  ENABLE_FUZZING_FALSE='#'
++else
++  ENABLE_FUZZING_TRUE='#'
++  ENABLE_FUZZING_FALSE=
++fi
++
++
++
+ # Check whether --with-system-install-dir was given.
+ if test ${with_system_install_dir+y}
+ then :
+@@ -21806,6 +21851,10 @@ if test -z "${ENABLE_ASAN_TRUE}" && test -z "${ENABLE_ASAN_FALSE}"; then
+   as_fn_error $? "conditional \"ENABLE_ASAN\" was never defined.
+ Usually this means the macro was only invoked conditionally." "$LINENO" 5
+ fi
++if test -z "${ENABLE_FUZZING_TRUE}" && test -z "${ENABLE_FUZZING_FALSE}"; then
++  as_fn_error $? "conditional \"ENABLE_FUZZING\" was never defined.
++Usually this means the macro was only invoked conditionally." "$LINENO" 5
++fi
+ if test -z "${BUILD_DOCUMENTATION_TRUE}" && test -z "${BUILD_DOCUMENTATION_FALSE}"; then
+   as_fn_error $? "conditional \"BUILD_DOCUMENTATION\" was never defined.
+ Usually this means the macro was only invoked conditionally." "$LINENO" 5
+@@ -24176,5 +24225,6 @@ echo "          Use libsystemd:         $have_libsystemd"
+ echo "          Use libmalcontent:      $have_libmalcontent"
+ echo "          Use libzstd:            $have_zstd"
+ echo "          Use auto sideloading:   $enable_auto_sideloading"
++echo "          Fuzzing enabled:        $enable_fuzzing"
+ echo ""
+ 
+diff --git a/configure.ac b/configure.ac
+index 3b85a03..2bef299 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -373,6 +373,24 @@ AC_ARG_ENABLE(asan,
+               [enable_asan=no])
+ AM_CONDITIONAL([ENABLE_ASAN], [test "x$enable_asan" = xyes])
+ 
++AC_ARG_ENABLE([fuzzing],
++              [AS_HELP_STRING([--enable-fuzzing],
++                              [Build AFL++ fuzzing harnesses (requires CC=afl-clang-fast)])],
++              [],
++              [enable_fuzzing=no])
++if test "x$enable_fuzzing" = xyes ; then
++   AC_MSG_CHECKING([whether $CC is an AFL++ compiler])
++   AC_PREPROC_IFELSE([AC_LANG_SOURCE([[
++#ifndef __AFL_COMPILER
++#error not an AFL compiler
++#endif
++   ]])],
++   [AC_MSG_RESULT([yes])],
++   [AC_MSG_RESULT([no])
++    AC_MSG_ERROR([--enable-fuzzing requires CC=afl-clang-fast (or afl-clang-lto). Re-run configure with CC set appropriately.])])
++fi
++AM_CONDITIONAL([ENABLE_FUZZING], [test "x$enable_fuzzing" = xyes])
++
+ AC_ARG_WITH(system-install-dir,
+            [AS_HELP_STRING([--with-system-install-dir=DIR],
+                            [Location of system installation [LOCALSTATEDIR/lib/flatpak]])],
+@@ -615,4 +633,5 @@ echo "          Use libsystemd:         $have_libsystemd"
+ echo "          Use libmalcontent:      $have_libmalcontent"
+ echo "          Use libzstd:            $have_zstd"
+ echo "          Use auto sideloading:   $enable_auto_sideloading"
++echo "          Fuzzing enabled:        $enable_fuzzing"
+ echo ""
+diff --git a/fuzz/Makefile.am.inc b/fuzz/Makefile.am.inc
+new file mode 100644
+index 0000000..6b2d062
+--- /dev/null
++++ b/fuzz/Makefile.am.inc
+@@ -0,0 +1,140 @@
++# AFL++ fuzz harnesses. Built only when --enable-fuzzing.
++# Each harness is a small C program defining LLVMFuzzerTestOneInput()
++# plus an AFL persistent-mode main(); harnesses link against the
++# libflatpak-common.la convenience archive.
++
++if ENABLE_FUZZING
++
++# Per-harness CPPFLAGS / CFLAGS additions on top of AM_CPPFLAGS / AM_CFLAGS.
++# AM_CPPFLAGS already provides -I paths to common/, subprojects/, libglnx/,
++# so we add only -DFLATPAK_COMPILATION (private headers) and the package
++# pkg-config CFLAGS the harnesses need.
++fuzz_common_cppflags = \
++	-DFLATPAK_COMPILATION \
++	$(BASE_CFLAGS) \
++	$(JSON_CFLAGS) \
++	$(OSTREE_CFLAGS) \
++	$(SOUP_CFLAGS) \
++	$(NULL)
++
++fuzz_common_libs = \
++	libflatpak-common.la \
++	libflatpak-common-base.la \
++	libglnx.la \
++	$(BASE_LIBS) \
++	$(JSON_LIBS) \
++	$(OSTREE_LIBS) \
++	$(SOUP_LIBS) \
++	$(ARCHIVE_LIBS) \
++	$(ZSTD_LIBS) \
++	$(INTERNAL_GPGME_LIBS) \
++	$(LIBSECCOMP_LIBS) \
++	$(MALCONTENT_LIBS) \
++	$(POLKIT_LIBS) \
++	$(SYSTEMD_LIBS) \
++	$(XAUTH_LIBS) \
++	$(XML_LIBS) \
++	$(NULL)
++
++fuzz_fuzz_smoke_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-smoke.c \
++	$(NULL)
++fuzz_fuzz_smoke_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_smoke_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_smoke_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-smoke
++
++fuzz_fuzz_ref_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-ref.c \
++	$(NULL)
++fuzz_fuzz_ref_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_ref_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_ref_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-ref
++
++fuzz_fuzz_oci_versioned_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-oci-versioned.c \
++	$(NULL)
++fuzz_fuzz_oci_versioned_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_versioned_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_versioned_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-oci-versioned
++
++fuzz_fuzz_oci_image_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-oci-image.c \
++	$(NULL)
++fuzz_fuzz_oci_image_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_image_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_image_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-oci-image
++
++fuzz_fuzz_repofile_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-repofile.c \
++	$(NULL)
++fuzz_fuzz_repofile_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_repofile_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_repofile_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-repofile
++
++fuzz_fuzz_filter_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-filter.c \
++	$(NULL)
++fuzz_fuzz_filter_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_filter_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_filter_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-filter
++
++fuzz_fuzz_metadata_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-metadata.c \
++	$(NULL)
++fuzz_fuzz_metadata_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_metadata_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_metadata_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-metadata
++
++fuzz_fuzz_oci_registry_local_SOURCES = \
++	fuzz/fuzz-common.c \
++	fuzz/fuzz-common.h \
++	fuzz/fuzz-oci-registry-local.c \
++	$(NULL)
++fuzz_fuzz_oci_registry_local_CFLAGS = $(AM_CFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_registry_local_CPPFLAGS = $(AM_CPPFLAGS) $(fuzz_common_cppflags)
++fuzz_fuzz_oci_registry_local_LDADD = $(fuzz_common_libs)
++
++noinst_PROGRAMS += fuzz/fuzz-oci-registry-local
++
++EXTRA_DIST += \
++	fuzz/README.md \
++	$(wildcard $(srcdir)/fuzz/dict/*.dict) \
++	$(wildcard $(srcdir)/fuzz/scripts/*.sh) \
++	$(wildcard $(srcdir)/fuzz/corpus/ref/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/oci-versioned/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/oci-image/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/repofile/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/filter/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/metadata/*) \
++	$(wildcard $(srcdir)/fuzz/corpus/oci-registry-local/*) \
++	$(NULL)
++
++endif # ENABLE_FUZZING
+diff --git a/fuzz/README.md b/fuzz/README.md
+new file mode 100644
+index 0000000..0079ab1
+--- /dev/null
++++ b/fuzz/README.md
+@@ -0,0 +1,15 @@
++# fuzz/ — AFL++ harnesses for Flatpak
++
++This directory is built only with `--enable-fuzzing`. See
++`../../docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md`
++for design context, and the "Fuzzing" section of the workspace
++`../../README.md` for the operational workflow.
++
++Layout:
++
++- `fuzz-*.c` — one harness per parser entry point.
++- `fuzz-common.{c,h}` — shared helpers.
++- `corpus/<target>/` — checked-in seed corpus (one minimal seed per
++  harness).
++- `dict/*.dict` — AFL++ dictionaries.
++- `scripts/` — `run.sh`, `cmin.sh`, `triage.sh`, `seed-from-tests.sh`.
+diff --git a/fuzz/corpus/filter/seed-1 b/fuzz/corpus/filter/seed-1
+new file mode 100644
+index 0000000..2a7f747
+--- /dev/null
++++ b/fuzz/corpus/filter/seed-1
+@@ -0,0 +1,4 @@
++# This is a fuzz-test filter file.
++allow app/org.example.*
++allow runtime/org.freedesktop.Platform/*
++deny app/org.bad.*
+diff --git a/fuzz/corpus/metadata/seed-1 b/fuzz/corpus/metadata/seed-1
+new file mode 100644
+index 0000000..fb6555f
+--- /dev/null
++++ b/fuzz/corpus/metadata/seed-1
+@@ -0,0 +1,19 @@
++[Application]
++name=org.example.Hello
++runtime=org.freedesktop.Platform/x86_64/22.08
++sdk=org.freedesktop.Sdk/x86_64/22.08
++command=hello
++
++[Context]
++shared=network;ipc;
++sockets=x11;wayland;pulseaudio;
++devices=dri;
++filesystems=home;xdg-config/foo:create;!/etc;
++features=devel;multiarch;
++
++[Session Bus Policy]
++org.freedesktop.Notifications=talk
++org.freedesktop.secrets=talk
++
++[Environment]
++LANG=en_US.UTF-8
+diff --git a/fuzz/corpus/oci-image/seed-1 b/fuzz/corpus/oci-image/seed-1
+new file mode 100644
+index 0000000..f3a853f
+--- /dev/null
++++ b/fuzz/corpus/oci-image/seed-1
+@@ -0,0 +1 @@
++{"created":"2025-01-01T00:00:00Z","architecture":"amd64","os":"linux","config":{"Env":["PATH=/app/bin:/usr/bin"],"Entrypoint":["/app/bin/hello"]},"rootfs":{"type":"layers","diff_ids":["sha256:0000000000000000000000000000000000000000000000000000000000000000"]},"history":[{"created":"2025-01-01T00:00:00Z","created_by":"hello"}]}
+diff --git a/fuzz/corpus/oci-registry-local/seed-1 b/fuzz/corpus/oci-registry-local/seed-1
+new file mode 100644
+index 0000000..5cfd606
+--- /dev/null
++++ b/fuzz/corpus/oci-registry-local/seed-1
+@@ -0,0 +1 @@
++{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","size":7023},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","size":32654}]}
+diff --git a/fuzz/corpus/oci-registry-local/seed-2 b/fuzz/corpus/oci-registry-local/seed-2
+new file mode 100644
+index 0000000..b5a26b3
+--- /dev/null
++++ b/fuzz/corpus/oci-registry-local/seed-2
+@@ -0,0 +1 @@
++{"created":"2025-01-01T00:00:00Z","architecture":"amd64","os":"linux","config":{"Env":["PATH=/app/bin"],"Entrypoint":["/app/bin/hello"]},"rootfs":{"type":"layers","diff_ids":["sha256:0000000000000000000000000000000000000000000000000000000000000000"]}}
+\ No newline at end of file
+diff --git a/fuzz/corpus/oci-registry-local/seed-3 b/fuzz/corpus/oci-registry-local/seed-3
+new file mode 100644
+index 0000000..9047b71
+--- /dev/null
++++ b/fuzz/corpus/oci-registry-local/seed-3
+@@ -0,0 +1 @@
++{"schemaVersion":2,"manifests":[]}
+\ No newline at end of file
+diff --git a/fuzz/corpus/oci-versioned/seed-index b/fuzz/corpus/oci-versioned/seed-index
+new file mode 100644
+index 0000000..67493d9
+--- /dev/null
++++ b/fuzz/corpus/oci-versioned/seed-index
+@@ -0,0 +1 @@
++{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","size":7143,"platform":{"architecture":"amd64","os":"linux"}}]}
+\ No newline at end of file
+diff --git a/fuzz/corpus/oci-versioned/seed-manifest b/fuzz/corpus/oci-versioned/seed-manifest
+new file mode 100644
+index 0000000..4a82823
+--- /dev/null
++++ b/fuzz/corpus/oci-versioned/seed-manifest
+@@ -0,0 +1 @@
++{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","size":7023},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","size":32654}]}
+\ No newline at end of file
+diff --git a/fuzz/corpus/ref/seed-app b/fuzz/corpus/ref/seed-app
+new file mode 100644
+index 0000000..7bfad7b
+Binary files /dev/null and b/fuzz/corpus/ref/seed-app differ
+diff --git a/fuzz/corpus/ref/seed-col-ref b/fuzz/corpus/ref/seed-col-ref
+new file mode 100644
+index 0000000..0d95491
+--- /dev/null
++++ b/fuzz/corpus/ref/seed-col-ref
+@@ -0,0 +1 @@
++org.example:app/org.example.Hello/x86_64/stable
+\ No newline at end of file
+diff --git a/fuzz/corpus/ref/seed-refspec b/fuzz/corpus/ref/seed-refspec
+new file mode 100644
+index 0000000..ef8e554
+--- /dev/null
++++ b/fuzz/corpus/ref/seed-refspec
+@@ -0,0 +1 @@
++flathub:app/org.example.Hello/x86_64/stable
+\ No newline at end of file
+diff --git a/fuzz/corpus/ref/seed-runtime b/fuzz/corpus/ref/seed-runtime
+new file mode 100644
+index 0000000..b4bc602
+Binary files /dev/null and b/fuzz/corpus/ref/seed-runtime differ
+diff --git a/fuzz/corpus/repofile/seed-1 b/fuzz/corpus/repofile/seed-1
+new file mode 100644
+index 0000000..e8bdc0c
+--- /dev/null
++++ b/fuzz/corpus/repofile/seed-1
+@@ -0,0 +1,8 @@
++[Flatpak Repo]
++Title=Fuzz Test
++Url=https://example.invalid/repo
++GPGKey=
++DefaultBranch=stable
++Description=A minimal seed for the fuzz harness.
++Homepage=https://example.invalid/
++Icon=https://example.invalid/icon.png
+diff --git a/fuzz/dict/keyfile.dict b/fuzz/dict/keyfile.dict
+new file mode 100644
+index 0000000..b596c7d
+--- /dev/null
++++ b/fuzz/dict/keyfile.dict
+@@ -0,0 +1,78 @@
++# GKeyFile groups used by flatpak metadata
++"[Application]"
++"[Runtime]"
++"[Context]"
++"[Session Bus Policy]"
++"[System Bus Policy]"
++"[Environment]"
++"[Build]"
++"[Extension]"
++"[Extra Data]"
++"[Policy]"
++"[Flatpak Repo]"
++"[Flatpak Ref]"
++
++# Common keys
++"name="
++"runtime="
++"sdk="
++"command="
++"shared="
++"sockets="
++"devices="
++"filesystems="
++"features="
++"persistent="
++"talk-name="
++"own-name="
++"see-name="
++"system-talk-name="
++"system-own-name="
++
++# Filesystem tokens
++"home"
++"host"
++"host-os"
++"host-etc"
++"xdg-config"
++"xdg-data"
++"xdg-cache"
++"xdg-documents"
++"xdg-pictures"
++"xdg-music"
++"xdg-videos"
++"xdg-download"
++
++# Share tokens
++"network"
++"ipc"
++
++# Socket tokens
++"x11"
++"wayland"
++"pulseaudio"
++"session-bus"
++"system-bus"
++"fallback-x11"
++"ssh-auth"
++"pcsc"
++"cups"
++
++# Device tokens
++"dri"
++"all"
++"kvm"
++"shm"
++
++# Feature tokens
++"devel"
++"multiarch"
++"bluetooth"
++"canbus"
++"per-app-dev-shm"
++
++# Bus-policy verbs
++"none"
++"see"
++"talk"
++"own"
+diff --git a/fuzz/dict/oci.dict b/fuzz/dict/oci.dict
+new file mode 100644
+index 0000000..4d6db27
+--- /dev/null
++++ b/fuzz/dict/oci.dict
+@@ -0,0 +1,42 @@
++# OCI mediatypes (from common/flatpak-json-oci-private.h)
++"application/vnd.oci.descriptor.v1+json"
++"application/vnd.oci.image.manifest.v1+json"
++"application/vnd.docker.distribution.manifest.v2+json"
++"application/vnd.oci.image.index.v1+json"
++"application/vnd.oci.image.layer.v1.tar+gzip"
++"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
++"application/vnd.oci.image.config.v1+json"
++"application/vnd.docker.container.image.v1+json"
++
++# OCI manifest field names
++"schemaVersion"
++"mediaType"
++"config"
++"layers"
++"manifests"
++"digest"
++"size"
++"urls"
++"annotations"
++"platform"
++"architecture"
++"os"
++"variant"
++"features"
++
++# Image-config fields
++"created"
++"author"
++"rootfs"
++"history"
++"diff_ids"
++"Env"
++"Cmd"
++"Entrypoint"
++"Volumes"
++"WorkingDir"
++"Labels"
++
++# Common digest algorithms
++"sha256:"
++"sha512:"
+diff --git a/fuzz/dict/ref.dict b/fuzz/dict/ref.dict
+new file mode 100644
+index 0000000..3b3b383
+--- /dev/null
++++ b/fuzz/dict/ref.dict
+@@ -0,0 +1,34 @@
++# Ref namespaces
++"app/"
++"runtime/"
++
++# Common arches (from data/flatpak-variants.gv and tests)
++"x86_64"
++"aarch64"
++"i386"
++"arm"
++"arm64"
++"riscv64"
++
++# Common branches
++"stable"
++"master"
++"22.08"
++"23.08"
++"24.08"
++
++# Subref / extension suffixes
++".Locale"
++".Debug"
++".Sources"
++".Compat"
++".BaseApp"
++
++# Collection-id separator
++":"
++
++# Reverse-DNS test names
++"org.example."
++"org.freedesktop.Platform"
++"org.freedesktop.Sdk"
++"org.flatpak."
+diff --git a/fuzz/fuzz-common.c b/fuzz/fuzz-common.c
+new file mode 100644
+index 0000000..3324721
+--- /dev/null
++++ b/fuzz/fuzz-common.c
+@@ -0,0 +1,77 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <ftw.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <gio/gio.h>
++
++char *
++fuzz_dup_cstring (const uint8_t *data, size_t size)
++{
++  if (size == 0)
++    return NULL;
++  return g_strndup ((const char *) data, size);
++}
++
++char *
++fuzz_sha256_hex (const uint8_t *data, size_t size)
++{
++  GChecksum *cs = g_checksum_new (G_CHECKSUM_SHA256);
++  g_checksum_update (cs, data, size);
++  char *hex = g_strdup (g_checksum_get_string (cs));
++  g_checksum_free (cs);
++  return hex;
++}
++
++char *
++fuzz_make_tmpdir (const char *name_template)
++{
++  /* g_dir_make_tmp wants a template ending in XXXXXX. */
++  char *full = g_strdup_printf ("%s-XXXXXX", name_template ? name_template : "fuzz");
++  GError *error = NULL;
++  char *path = g_dir_make_tmp (full, &error);
++  g_free (full);
++  if (path == NULL)
++    {
++      g_warning ("fuzz_make_tmpdir: %s", error ? error->message : "unknown");
++      g_clear_error (&error);
++      return NULL;
++    }
++  return path;
++}
++
++static int
++unlink_cb (const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf)
++{
++  (void) sb; (void) typeflag; (void) ftwbuf;
++  return remove (fpath);
++}
++
++void
++fuzz_rm_rf (const char *path)
++{
++  if (path == NULL || path[0] == '\0')
++    return;
++  /* nopenfd=64: arbitrary, must be > 0. */
++  nftw (path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
++}
++
++gboolean
++fuzz_write_file (const char *path, const uint8_t *data, size_t size)
++{
++  GError *error = NULL;
++  gboolean ok = g_file_set_contents (path, (const char *) data, (gssize) size, &error);
++  if (!ok)
++    {
++      g_warning ("fuzz_write_file %s: %s", path, error ? error->message : "unknown");
++      g_clear_error (&error);
++    }
++  return ok;
++}
+diff --git a/fuzz/fuzz-common.h b/fuzz/fuzz-common.h
+new file mode 100644
+index 0000000..46c0511
+--- /dev/null
++++ b/fuzz/fuzz-common.h
+@@ -0,0 +1,97 @@
++/*
++ * Shared helpers for AFL++ fuzz harnesses.
++ *
++ * Each harness defines LLVMFuzzerTestOneInput() (libFuzzer-compatible
++ * signature) and uses FUZZ_AFL_PERSISTENT_MAIN() to wrap it in an
++ * AFL++ persistent-mode main(). Build with afl-clang-fast.
++ */
++#ifndef FUZZ_COMMON_H
++#define FUZZ_COMMON_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include <glib.h>
++
++/* libFuzzer-compatible entry point each harness must define. */
++int LLVMFuzzerTestOneInput (const uint8_t *data, size_t size);
++
++/* Duplicate `data` (length `size`) as a NUL-terminated heap string.
++ * Returns NULL on size == 0 to keep harnesses simple. Caller g_free()s. */
++char * fuzz_dup_cstring (const uint8_t *data, size_t size);
++
++/* Compute lowercase-hex sha256 of `bytes` (length `size`). Caller g_free()s. */
++char * fuzz_sha256_hex (const uint8_t *data, size_t size);
++
++/* Create a unique tmpdir under /tmp and return its absolute path.
++ * Caller must rm -rf and g_free(). Returns NULL on failure (the
++ * harness should `abort()` if so — this is harness infrastructure,
++ * not the system under test). */
++char * fuzz_make_tmpdir (const char *name_template);
++
++/* Recursively rm -rf a directory. */
++void fuzz_rm_rf (const char *path);
++
++/* Write `data` (length `size`) to a file at `path` (full overwrite). */
++gboolean fuzz_write_file (const char    *path,
++                          const uint8_t *data,
++                          size_t         size);
++
++/*
++ * AFL++ persistent-mode main wrapper. Place at file scope of each harness:
++ *
++ *     #include "fuzz-common.h"
++ *     int LLVMFuzzerTestOneInput(const uint8_t *d, size_t s) { ... }
++ *     FUZZ_AFL_PERSISTENT_MAIN(10000)
++ *
++ * The argument is the persistent-loop iteration count (a typical value
++ * is 10000). When run outside AFL (e.g., to validate a single seed),
++ * the binary reads the input from argv[1] and exits.
++ */
++#ifdef __AFL_COMPILER
++/* Emitted at file scope of each harness via the macro below — must NOT
++ * appear in this header at top level, or every translation unit that
++ * #includes fuzz-common.h ends up defining __afl_sharedmem_fuzzing /
++ * __afl_fuzz_alt / __afl_fuzz_alt_ptr and link fails with multiple
++ * definitions. The macro body is at file scope when invoked, so the
++ * AFL globals land exactly once per binary. */
++#define FUZZ_AFL_PERSISTENT_MAIN(LOOPS)                               \
++  __AFL_FUZZ_INIT();                                                  \
++  int main (int argc, char **argv)                                    \
++  {                                                                   \
++    if (argc > 1)                                                     \
++      {                                                               \
++        gchar *contents = NULL;                                       \
++        gsize len = 0;                                                \
++        if (!g_file_get_contents (argv[1], &contents, &len, NULL))    \
++          return 2;                                                   \
++        LLVMFuzzerTestOneInput ((const uint8_t *) contents, len);     \
++        g_free (contents);                                            \
++        return 0;                                                     \
++      }                                                               \
++    __AFL_INIT();                                                     \
++    unsigned char *buf = __AFL_FUZZ_TESTCASE_BUF;                     \
++    while (__AFL_LOOP (LOOPS))                                        \
++      {                                                               \
++        int n = __AFL_FUZZ_TESTCASE_LEN;                              \
++        if (n <= 0) continue;                                         \
++        LLVMFuzzerTestOneInput (buf, (size_t) n);                     \
++      }                                                               \
++    return 0;                                                         \
++  }
++#else
++/* Non-AFL build: read input from argv[1] and exit. Useful for ASan repro. */
++#define FUZZ_AFL_PERSISTENT_MAIN(LOOPS)                               \
++  int main (int argc, char **argv)                                    \
++  {                                                                   \
++    gchar *contents = NULL;                                           \
++    gsize len = 0;                                                    \
++    if (argc < 2) return 2;                                           \
++    if (!g_file_get_contents (argv[1], &contents, &len, NULL))        \
++      return 2;                                                       \
++    LLVMFuzzerTestOneInput ((const uint8_t *) contents, len);         \
++    g_free (contents);                                                \
++    return 0;                                                         \
++  }
++#endif
++
++#endif /* FUZZ_COMMON_H */
+diff --git a/fuzz/fuzz-filter.c b/fuzz/fuzz-filter.c
+new file mode 100644
+index 0000000..d3623aa
+--- /dev/null
++++ b/fuzz/fuzz-filter.c
+@@ -0,0 +1,28 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++
++#include "flatpak-utils-private.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size == 0 || size > (1 << 18))
++    return 0;
++
++  g_autofree char *s = fuzz_dup_cstring (data, size);
++  if (s == NULL)
++    return 0;
++
++  GRegex *allow = NULL, *deny = NULL;
++  g_autoptr(GError) error = NULL;
++  flatpak_parse_filters (s, &allow, &deny, &error);
++
++  if (allow) g_regex_unref (allow);
++  if (deny) g_regex_unref (deny);
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-metadata.c b/fuzz/fuzz-metadata.c
+new file mode 100644
+index 0000000..d907375
+--- /dev/null
++++ b/fuzz/fuzz-metadata.c
+@@ -0,0 +1,27 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++
++#include "flatpak-context-private.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size == 0 || size > (1 << 18))
++    return 0;
++
++  g_autoptr(GKeyFile) keyfile = g_key_file_new ();
++  g_autoptr(GError) error = NULL;
++
++  if (!g_key_file_load_from_data (keyfile, (const char *) data, size,
++                                  G_KEY_FILE_NONE, &error))
++    return 0;
++
++  g_autoptr(FlatpakContext) ctx = flatpak_context_new ();
++  flatpak_context_load_metadata (ctx, keyfile, &error);
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-oci-image.c b/fuzz/fuzz-oci-image.c
+new file mode 100644
+index 0000000..a637fc9
+--- /dev/null
++++ b/fuzz/fuzz-oci-image.c
+@@ -0,0 +1,25 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++#include <gio/gio.h>
++
++#include "flatpak-json-oci-private.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size == 0 || size > (1 << 20))
++    return 0;
++
++  g_autoptr(GBytes) bytes = g_bytes_new (data, size);
++  g_autoptr(GError) error = NULL;
++
++  FlatpakOciImage *img = flatpak_oci_image_from_json (bytes, &error);
++  if (img != NULL)
++    g_object_unref (img);
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-oci-registry-local.c b/fuzz/fuzz-oci-registry-local.c
+new file mode 100644
+index 0000000..a70c3bc
+--- /dev/null
++++ b/fuzz/fuzz-oci-registry-local.c
+@@ -0,0 +1,113 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++#include <gio/gio.h>
++
++#include "flatpak-oci-registry-private.h"
++#include "flatpak-json-oci-private.h"
++
++static gchar *
++build_uri (const char *path)
++{
++  GFile *f = g_file_new_for_path (path);
++  gchar *uri = g_file_get_uri (f);
++  g_object_unref (f);
++  return uri;
++}
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  /* All g_auto* variables declared up-front so the cleanup attributes
++   * always see a well-defined (NULL) value, even on early goto out. */
++  g_autofree char *tmpdir = NULL;
++  g_autofree char *layout_path = NULL;
++  g_autofree char *blobs_dir = NULL;
++  g_autofree char *digest_hex = NULL;
++  g_autofree char *blob_path = NULL;
++  g_autofree char *index_path = NULL;
++  g_autofree char *index_json = NULL;
++  g_autofree char *uri = NULL;
++  g_autofree char *digest_ref = NULL;
++  g_autoptr(GError) error = NULL;
++  g_autoptr(FlatpakOciRegistry) registry = NULL;
++
++  static const char layout[] = "{\"imageLayoutVersion\": \"1.0.0\"}";
++
++  if (size == 0 || size > (1 << 19))
++    return 0;
++
++  tmpdir = fuzz_make_tmpdir ("flatpak-fuzz-reg");
++  if (tmpdir == NULL)
++    return 0;
++
++  /* oci-layout */
++  layout_path = g_build_filename (tmpdir, "oci-layout", NULL);
++  if (!fuzz_write_file (layout_path, (const uint8_t *) layout, sizeof (layout) - 1))
++    goto out;
++
++  /* blobs/sha256/<digest> */
++  blobs_dir = g_build_filename (tmpdir, "blobs", "sha256", NULL);
++  if (g_mkdir_with_parents (blobs_dir, 0700) != 0)
++    goto out;
++  digest_hex = fuzz_sha256_hex (data, size);
++  blob_path = g_build_filename (blobs_dir, digest_hex, NULL);
++  if (!fuzz_write_file (blob_path, data, size))
++    goto out;
++
++  /* index.json — minimal but well-formed: reference the blob as a manifest. */
++  index_path = g_build_filename (tmpdir, "index.json", NULL);
++  index_json = g_strdup_printf (
++    "{\"schemaVersion\":2,\"manifests\":[{"
++      "\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\","
++      "\"digest\":\"sha256:%s\","
++      "\"size\":%zu"
++    "}]}", digest_hex, size);
++  fuzz_write_file (index_path, (const uint8_t *) index_json, strlen (index_json));
++
++  /* Open the registry. */
++  uri = build_uri (tmpdir);
++  registry = flatpak_oci_registry_new (uri, FALSE, -1, NULL, &error);
++  if (registry == NULL)
++    goto out;
++
++  digest_ref = g_strdup_printf ("sha256:%s", digest_hex);
++
++  /* Drive the load. The first byte of the input doubles as a flavour
++   * selector, so every input shape is exercised by at least one
++   * load function over the corpus. */
++  switch (data[0] % 3)
++    {
++    case 0:
++      {
++        gsize out_size = 0;
++        FlatpakOciVersioned *v = flatpak_oci_registry_load_versioned (
++          registry, NULL, digest_ref, NULL, &out_size, NULL, &error);
++        if (v) g_object_unref (v);
++        break;
++      }
++    case 1:
++      {
++        gsize out_size = 0;
++        FlatpakOciImage *img = flatpak_oci_registry_load_image_config (
++          registry, NULL, digest_ref, NULL, &out_size, NULL, &error);
++        if (img) g_object_unref (img);
++        break;
++      }
++    case 2:
++      {
++        FlatpakOciIndex *idx = flatpak_oci_registry_load_index (
++          registry, NULL, &error);
++        if (idx) g_object_unref (idx);
++        break;
++      }
++    }
++
++out:
++  if (tmpdir != NULL)
++    fuzz_rm_rf (tmpdir);
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (1000)
+diff --git a/fuzz/fuzz-oci-versioned.c b/fuzz/fuzz-oci-versioned.c
+new file mode 100644
+index 0000000..c952d34
+--- /dev/null
++++ b/fuzz/fuzz-oci-versioned.c
+@@ -0,0 +1,41 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++#include <gio/gio.h>
++
++#include "flatpak-json-oci-private.h"
++
++static const char *content_type_for_byte (uint8_t b) {
++  switch (b % 4) {
++    case 0: return NULL;
++    case 1: return FLATPAK_OCI_MEDIA_TYPE_IMAGE_MANIFEST;
++    case 2: return FLATPAK_OCI_MEDIA_TYPE_IMAGE_INDEX;
++    case 3: return FLATPAK_DOCKER_MEDIA_TYPE_IMAGE_MANIFEST2;
++  }
++  return NULL;
++}
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size < 2 || size > (1 << 20))
++    return 0;
++
++  const char *ct = content_type_for_byte (data[0]);
++  g_autoptr(GBytes) bytes = g_bytes_new (data + 1, size - 1);
++  g_autoptr(GError) error = NULL;
++
++  FlatpakOciVersioned *v = flatpak_oci_versioned_from_json (bytes, ct, &error);
++  if (v != NULL)
++    {
++      const char *mt = flatpak_oci_versioned_get_mediatype (v);
++      gint64 ver = flatpak_oci_versioned_get_version (v);
++      (void) mt; (void) ver;
++      g_object_unref (v);
++    }
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-ref.c b/fuzz/fuzz-ref.c
+new file mode 100644
+index 0000000..c01bc08
+--- /dev/null
++++ b/fuzz/fuzz-ref.c
+@@ -0,0 +1,47 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++
++#include "flatpak-ref-utils-private.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size < 2 || size > 4096)
++    return 0;
++
++  uint8_t selector = data[0];
++  g_autofree char *s = fuzz_dup_cstring (data + 1, size - 1);
++  g_autoptr(GError) error = NULL;
++  FlatpakDecomposed *ref = NULL;
++
++  switch (selector % 3)
++    {
++    case 0:
++      ref = flatpak_decomposed_new_from_ref (s, &error);
++      break;
++    case 1:
++      ref = flatpak_decomposed_new_from_refspec (s, &error);
++      break;
++    case 2:
++      ref = flatpak_decomposed_new_from_col_ref (s, NULL, &error);
++      break;
++    }
++
++  if (ref != NULL)
++    {
++      g_autofree char *id = flatpak_decomposed_dup_id (ref);
++      g_autofree char *arch = flatpak_decomposed_dup_arch (ref);
++      g_autofree char *branch = flatpak_decomposed_dup_branch (ref);
++      g_autofree char *pref = flatpak_decomposed_dup_pref (ref);
++      g_autofree char *rid = flatpak_decomposed_dup_readable_id (ref);
++      const char *cid = flatpak_decomposed_get_collection_id (ref);
++      (void) id; (void) arch; (void) branch; (void) pref; (void) rid; (void) cid;
++      flatpak_decomposed_unref (ref);
++    }
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-repofile.c b/fuzz/fuzz-repofile.c
+new file mode 100644
+index 0000000..3d9d28b
+--- /dev/null
++++ b/fuzz/fuzz-repofile.c
+@@ -0,0 +1,31 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++#include <glib.h>
++#include <gio/gio.h>
++
++#include "flatpak-utils-private.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  if (size == 0 || size > (1 << 18))
++    return 0;
++
++  g_autoptr(GKeyFile) keyfile = g_key_file_new ();
++  g_autoptr(GError) error = NULL;
++
++  if (!g_key_file_load_from_data (keyfile, (const char *) data, size,
++                                  G_KEY_FILE_NONE, &error))
++    return 0;
++
++  g_autoptr(GBytes) gpg_data = NULL;
++  GKeyFile *parsed = flatpak_parse_repofile ("fuzz-remote", FALSE, keyfile,
++                                             &gpg_data, NULL, &error);
++  if (parsed != NULL)
++    g_key_file_unref (parsed);
++
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/fuzz-smoke.c b/fuzz/fuzz-smoke.c
+new file mode 100644
+index 0000000..b3e81d4
+--- /dev/null
++++ b/fuzz/fuzz-smoke.c
+@@ -0,0 +1,18 @@
++#include "config.h"
++#include "fuzz-common.h"
++
++int
++LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
++{
++  /* Exercise just the helpers so the build links them. */
++  if (size > 0)
++    {
++      g_autofree char *s = fuzz_dup_cstring (data, size);
++      g_autofree char *h = fuzz_sha256_hex (data, size);
++      (void) s;
++      (void) h;
++    }
++  return 0;
++}
++
++FUZZ_AFL_PERSISTENT_MAIN (10000)
+diff --git a/fuzz/scripts/cmin.sh b/fuzz/scripts/cmin.sh
+new file mode 100755
+index 0000000..6b3e35e
+--- /dev/null
++++ b/fuzz/scripts/cmin.sh
+@@ -0,0 +1,26 @@
++#!/usr/bin/env bash
++# Minimize a fuzz corpus with afl-cmin. Replaces fuzz/corpus/<target>/
++# with the minimized set, preserving from-tests/ and seed-* files.
++#
++# Usage: ./fuzz/scripts/cmin.sh <harness-name>
++set -euo pipefail
++
++if [ $# -lt 1 ]; then
++  echo "usage: $0 <harness-name>" >&2
++  exit 2
++fi
++
++harness="${1#fuzz/}"
++target_short="${harness#fuzz-}"
++bin="fuzz/${harness}"
++src="fuzz/corpus/${target_short}"
++dst="fuzz/corpus/${target_short}.cmin"
++
++if [ ! -x "$bin" ]; then echo "$bin not built" >&2; exit 1; fi
++if [ ! -d "$src" ]; then echo "$src missing" >&2; exit 1; fi
++
++rm -rf "$dst"
++afl-cmin -i "$src" -o "$dst" -t 1000 -m none -- "$bin"
++echo
++echo "Minimized into $dst (orig: $(find "$src" -type f | wc -l), min: $(find "$dst" -type f | wc -l))."
++echo "Apply: rm -rf $src && mv $dst $src"
+diff --git a/fuzz/scripts/run.sh b/fuzz/scripts/run.sh
+new file mode 100755
+index 0000000..409e9d0
+--- /dev/null
++++ b/fuzz/scripts/run.sh
+@@ -0,0 +1,59 @@
++#!/usr/bin/env bash
++# Launch a single fuzz harness under afl-fuzz.
++#
++# Usage:
++#   ./fuzz/scripts/run.sh <harness-name> [duration]
++#   ./fuzz/scripts/run.sh fuzz-metadata
++#   ./fuzz/scripts/run.sh fuzz-metadata 4h
++#
++# Defaults to running until Ctrl-C if no duration is given.
++set -euo pipefail
++
++if [ $# -lt 1 ]; then
++  echo "usage: $0 <harness-name> [duration]" >&2
++  echo "  harness-name: one of fuzz-{ref,oci-versioned,oci-image,repofile,filter,metadata,oci-registry-local,smoke}" >&2
++  exit 2
++fi
++
++harness="$1"
++duration="${2:-}"
++
++# Strip optional fuzz/ prefix.
++harness="${harness#fuzz/}"
++
++bin="fuzz/${harness}"
++target_short="${harness#fuzz-}"
++
++# Map harness name to corpus + dict.
++corpus="fuzz/corpus/${target_short}"
++case "$target_short" in
++  oci-versioned|oci-image|oci-registry-local) dict="fuzz/dict/oci.dict" ;;
++  repofile|filter|metadata)                   dict="fuzz/dict/keyfile.dict" ;;
++  ref)                                        dict="fuzz/dict/ref.dict" ;;
++  *)                                          dict="" ;;
++esac
++
++if [ ! -x "$bin" ]; then
++  echo "$bin not found or not executable. Run 'make $bin' first." >&2
++  exit 1
++fi
++
++if [ ! -d "$corpus" ]; then
++  echo "$corpus not found." >&2
++  exit 1
++fi
++
++out="fuzz/out/${target_short}"
++mkdir -p "$out"
++
++args=(-i "$corpus" -o "$out" -t 1000 -m none)
++[ -n "$dict" ] && [ -f "$dict" ] && args+=(-x "$dict")
++[ -n "$duration" ] && args+=(-V "$duration")
++
++# AFL-side env: persistent mode is auto-detected via the binary's symbols.
++export AFL_AUTORESUME=1
++export AFL_SKIP_CPUFREQ=1
++export AFL_DISABLE_TRIM=0
++
++echo "Running: afl-fuzz ${args[*]} -- $bin"
++exec afl-fuzz "${args[@]}" -- "$bin"
+diff --git a/fuzz/scripts/seed-from-tests.sh b/fuzz/scripts/seed-from-tests.sh
+new file mode 100755
+index 0000000..4962d10
+--- /dev/null
++++ b/fuzz/scripts/seed-from-tests.sh
+@@ -0,0 +1,53 @@
++#!/usr/bin/env bash
++# Harvest additional fuzz seeds from a previously-run test suite.
++#
++# Usage:
++#   1. Run: TEST_SKIP_CLEANUP=1 make check TESTS=tests/test-oci-registry.sh.test
++#      (or any subset). The .testtmp dirs under tests/ remain populated.
++#   2. From the build directory: ./fuzz/scripts/seed-from-tests.sh
++#
++# Adds files into fuzz/corpus/<target>/from-tests/ — separate from the
++# checked-in seeds so users can wipe them without losing the canonical
++# minimum.
++set -euo pipefail
++
++if [ ! -d tests ]; then
++  echo "Run from the flatpak-1.12.9 build directory (with tests/)." >&2
++  exit 2
++fi
++
++CORPUS_ROOT="${CORPUS_ROOT:-fuzz/corpus}"
++
++mkdir -p "$CORPUS_ROOT"/{ref,oci-versioned,oci-image,repofile,filter,metadata,oci-registry-local}/from-tests
++
++count_before=$(find "$CORPUS_ROOT" -type f -name 'from-tests*' 2>/dev/null | wc -l)
++
++# Metadata files from app/runtime test fixtures.
++find tests -name 'metadata' -type f 2>/dev/null | head -20 | while read -r f; do
++  dst="$CORPUS_ROOT/metadata/from-tests/$(echo "$f" | tr '/' '_')"
++  cp -f "$f" "$dst"
++done
++
++# .flatpakrepo files from remote test fixtures.
++find tests -name '*.flatpakrepo' -type f 2>/dev/null | head -20 | while read -r f; do
++  dst="$CORPUS_ROOT/repofile/from-tests/$(echo "$f" | tr '/' '_')"
++  cp -f "$f" "$dst"
++done
++
++# OCI manifests and image configs from the OCI registry test server.
++find tests -path '*oci*' -name '*.json' -type f 2>/dev/null | head -40 | while read -r f; do
++  # Heuristic: files mentioning "image.manifest" or "image.index" go to oci-versioned;
++  # files mentioning "image.config" go to oci-image.
++  if grep -lq 'image.manifest\|image.index' "$f" 2>/dev/null; then
++    dst="$CORPUS_ROOT/oci-versioned/from-tests/$(echo "$f" | tr '/' '_')"
++    # Prepend a selector byte (0x00) so the harness sees the file as input.
++    { printf '\x00'; cat "$f"; } > "$dst"
++  elif grep -lq 'image.config\|rootfs' "$f" 2>/dev/null; then
++    dst="$CORPUS_ROOT/oci-image/from-tests/$(echo "$f" | tr '/' '_')"
++    cp -f "$f" "$dst"
++  fi
++done
++
++count_after=$(find "$CORPUS_ROOT" -type f -path '*/from-tests/*' 2>/dev/null | wc -l)
++added=$((count_after - count_before))
++echo "Harvested $count_after seeds (+$added new) into $CORPUS_ROOT/*/from-tests/"
+diff --git a/fuzz/scripts/triage.sh b/fuzz/scripts/triage.sh
+new file mode 100755
+index 0000000..fe8c993
+--- /dev/null
++++ b/fuzz/scripts/triage.sh
+@@ -0,0 +1,38 @@
++#!/usr/bin/env bash
++# Triage a single AFL crash: minimize with afl-tmin and capture an
++# ASan-decorated stack trace.
++#
++# Usage: ./fuzz/scripts/triage.sh <harness-name> <crash-file>
++set -euo pipefail
++
++if [ $# -lt 2 ]; then
++  echo "usage: $0 <harness-name> <crash-file>" >&2
++  exit 2
++fi
++
++harness="${1#fuzz/}"
++target_short="${harness#fuzz-}"
++bin="fuzz/${harness}"
++crash="$2"
++
++if [ ! -x "$bin" ]; then echo "$bin not built" >&2; exit 1; fi
++if [ ! -f "$crash" ]; then echo "$crash missing" >&2; exit 1; fi
++
++triage_dir="fuzz/triage/${target_short}/$(basename "$crash")"
++mkdir -p "$triage_dir"
++min="$triage_dir/min"
++log="$triage_dir/asan.log"
++
++afl-tmin -i "$crash" -o "$min" -t 5000 -m none -- "$bin"
++
++# Re-run under ASan, capturing the abort stack.
++ASAN_OPTIONS="abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0" \
++  "$bin" "$min" > "$log" 2>&1 || true
++
++echo
++echo "Triaged: $crash"
++echo "  Minimized: $min  ($(stat -c%s "$min") bytes)"
++echo "  ASan log: $log"
++echo
++echo "First 40 lines of ASan output:"
++head -40 "$log" || true
