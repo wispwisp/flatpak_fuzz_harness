@@ -1,17 +1,15 @@
 # Flatpak fuzz harness reference
 
 A per-harness description of the AFL++ fuzz harnesses landed in
-[`work/FUZZ_HARNESS.patch`](work/FUZZ_HARNESS.patch). Eight harnesses
-total. For build-system rationale and the wider attack-surface model see
-[`docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md`](docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md);
+[`FUZZ_HARNESS.patch`](FUZZ_HARNESS.patch). Eight harnesses total. For
+build-system rationale and the wider attack-surface model see
+[`docs/superpowers/specs/2026-05-14-fuzzing-source-prep-design.md`](docs/superpowers/specs/2026-05-14-fuzzing-source-prep-design.md);
 this document is descriptive, not normative.
 
 All file:line references point into the flatpak-1.12.9 source tree
-(`common/`), unpacked from the SRPM at
-`work/flatpak-1.12.9-1.el8_10.src.rpm`. They were verified once when the
-design spec was written; the harnesses themselves call the symbols by
-name, so a line drift in a point release does not invalidate the
-attack-surface claim.
+(`common/`). They were verified once when the design spec was written;
+the harnesses themselves call the symbols by name, so a line drift in a
+point release does not invalidate the attack-surface claim.
 
 ## Summary
 
@@ -502,13 +500,11 @@ Out of scope across both v1 and v2:
 
 ## Cross-references
 
-- Design rationale: [`docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md`](docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md)
-- Original implementation plan: [`docs/superpowers/plans/2026-05-08-flatpak-aflpp-fuzzing.md`](docs/superpowers/plans/2026-05-08-flatpak-aflpp-fuzzing.md)
-- Instrumentation-fix plan and design (the work-in-progress that gates
-  ASan/UBSan reaching the harness binaries):
-  [`docs/superpowers/specs/2026-05-12-fuzz-harness-instrumentation-fix-design.md`](docs/superpowers/specs/2026-05-12-fuzz-harness-instrumentation-fix-design.md)
-  · [`docs/superpowers/plans/2026-05-12-fuzz-harness-instrumentation-fix.md`](docs/superpowers/plans/2026-05-12-fuzz-harness-instrumentation-fix.md)
-- Build container: [`Dockerfile.fuzz`](Dockerfile.fuzz) ·
-  [`docs/superpowers/specs/2026-05-12-fuzz-runtime-container-design.md`](docs/superpowers/specs/2026-05-12-fuzz-runtime-container-design.md)
-- Operational workflow: workspace [`README.md`](README.md) "Fuzzing"
-  section and [`fuzz/README.md`](fuzz/README.md) inside the patch.
+- Design rationale: [`docs/superpowers/specs/2026-05-14-fuzzing-source-prep-design.md`](docs/superpowers/specs/2026-05-14-fuzzing-source-prep-design.md)
+- Generalized howto for other packages: [`docs/superpowers/notes/package-aflpp-instrumentation.md`](docs/superpowers/notes/package-aflpp-instrumentation.md)
+- Project guidance (fuzzing context, upper-system build contract, open
+  symbol-visibility issue): [`CLAUDE.md`](CLAUDE.md)
+- Per-harness layout inside the tarball after patching:
+  `fuzz/README.md` (created by the patch).
+- Build container and operational workflow live in the upper fuzzing
+  system, not in this tree.

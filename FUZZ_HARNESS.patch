@@ -10,101 +10,6 @@ index 806984a..f9622c1 100644
  
  if !WITH_SYSTEM_DBUS_PROXY
  libexec_PROGRAMS+=flatpak-dbus-proxy
-diff --git a/configure b/configure
-index f918e76..ffe3bc2 100755
---- a/configure
-+++ b/configure
-@@ -728,6 +728,8 @@ SYSTEM_HELPER_USER
- sysusersdir
- RUN_MEDIA_DIR
- SYSTEM_INSTALL_DIR
-+ENABLE_FUZZING_FALSE
-+ENABLE_FUZZING_TRUE
- ENABLE_ASAN_FALSE
- ENABLE_ASAN_TRUE
- SUDO_BIN
-@@ -1001,6 +1003,7 @@ enable_seccomp
- with_priv_mode
- enable_sudo
- enable_asan
-+enable_fuzzing
- with_system_install_dir
- with_run_media_dir
- with_sysusersdir
-@@ -1741,6 +1744,8 @@ Optional Features:
-   --enable-sudo           Use sudo to set setuid flags on binaries during
-                           install (only needed if userns disabled)
-   --enable-asan           Use build with address sanitazion
-+  --enable-fuzzing        Build AFL++ fuzzing harnesses (requires
-+                          CC=afl-clang-fast)
-   --enable-documentation  Build documentation
-   --enable-introspection=[no/auto/yes]
-                           Enable introspection for this build
-@@ -20440,6 +20445,46 @@ fi
- 
- 
- 
-+# Check whether --enable-fuzzing was given.
-+if test ${enable_fuzzing+y}
-+then :
-+  enableval=$enable_fuzzing;
-+else $as_nop
-+  enable_fuzzing=no
-+fi
-+
-+if test "x$enable_fuzzing" = xyes ; then
-+   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC is an AFL++ compiler" >&5
-+printf %s "checking whether $CC is an AFL++ compiler... " >&6; }
-+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-+/* end confdefs.h.  */
-+
-+#ifndef __AFL_COMPILER
-+#error not an AFL compiler
-+#endif
-+_ACEOF
-+if ac_fn_c_try_cpp "$LINENO"
-+then :
-+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-+printf "%s\n" "yes" >&6; }
-+else $as_nop
-+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-+printf "%s\n" "no" >&6; }
-+   as_fn_error $? "--enable-fuzzing requires CC=afl-clang-fast (or afl-clang-lto). Re-run configure with CC set appropriately." "$LINENO" 5
-+fi
-+rm -f conftest.err conftest.i conftest.$ac_ext
-+fi
-+
-+ if test "x$enable_fuzzing" = xyes; then
-+  ENABLE_FUZZING_TRUE=
-+  ENABLE_FUZZING_FALSE='#'
-+else
-+  ENABLE_FUZZING_TRUE='#'
-+  ENABLE_FUZZING_FALSE=
-+fi
-+
-+
-+
- # Check whether --with-system-install-dir was given.
- if test ${with_system_install_dir+y}
- then :
-@@ -21806,6 +21851,10 @@ if test -z "${ENABLE_ASAN_TRUE}" && test -z "${ENABLE_ASAN_FALSE}"; then
-   as_fn_error $? "conditional \"ENABLE_ASAN\" was never defined.
- Usually this means the macro was only invoked conditionally." "$LINENO" 5
- fi
-+if test -z "${ENABLE_FUZZING_TRUE}" && test -z "${ENABLE_FUZZING_FALSE}"; then
-+  as_fn_error $? "conditional \"ENABLE_FUZZING\" was never defined.
-+Usually this means the macro was only invoked conditionally." "$LINENO" 5
-+fi
- if test -z "${BUILD_DOCUMENTATION_TRUE}" && test -z "${BUILD_DOCUMENTATION_FALSE}"; then
-   as_fn_error $? "conditional \"BUILD_DOCUMENTATION\" was never defined.
- Usually this means the macro was only invoked conditionally." "$LINENO" 5
-@@ -24176,5 +24225,6 @@ echo "          Use libsystemd:         $have_libsystemd"
- echo "          Use libmalcontent:      $have_libmalcontent"
- echo "          Use libzstd:            $have_zstd"
- echo "          Use auto sideloading:   $enable_auto_sideloading"
-+echo "          Fuzzing enabled:        $enable_fuzzing"
- echo ""
- 
 diff --git a/configure.ac b/configure.ac
 index 3b85a03..2bef299 100644
 --- a/configure.ac
@@ -115,7 +20,7 @@ index 3b85a03..2bef299 100644
  
 +AC_ARG_ENABLE([fuzzing],
 +              [AS_HELP_STRING([--enable-fuzzing],
-+                              [Build AFL++ fuzzing harnesses (requires CC=afl-clang-fast)])],
++                              [Build AFL++ fuzzing harnesses (requires an AFL++ compiler, e.g. CC=afl-gcc-fast)])],
 +              [],
 +              [enable_fuzzing=no])
 +if test "x$enable_fuzzing" = xyes ; then
@@ -127,7 +32,7 @@ index 3b85a03..2bef299 100644
 +   ]])],
 +   [AC_MSG_RESULT([yes])],
 +   [AC_MSG_RESULT([no])
-+    AC_MSG_ERROR([--enable-fuzzing requires CC=afl-clang-fast (or afl-clang-lto). Re-run configure with CC set appropriately.])])
++    AC_MSG_ERROR([--enable-fuzzing requires an AFL++ compiler (CC=afl-gcc-fast or CC=afl-clang-fast). Re-run configure with CC set appropriately.])])
 +fi
 +AM_CONDITIONAL([ENABLE_FUZZING], [test "x$enable_fuzzing" = xyes])
 +
@@ -145,7 +50,7 @@ new file mode 100644
 index 0000000..6b2d062
 --- /dev/null
 +++ b/fuzz/Makefile.am.inc
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,139 @@
 +# AFL++ fuzz harnesses. Built only when --enable-fuzzing.
 +# Each harness is a small C program defining LLVMFuzzerTestOneInput()
 +# plus an AFL persistent-mode main(); harnesses link against the
@@ -275,7 +180,6 @@ index 0000000..6b2d062
 +EXTRA_DIST += \
 +	fuzz/README.md \
 +	$(wildcard $(srcdir)/fuzz/dict/*.dict) \
-+	$(wildcard $(srcdir)/fuzz/scripts/*.sh) \
 +	$(wildcard $(srcdir)/fuzz/corpus/ref/*) \
 +	$(wildcard $(srcdir)/fuzz/corpus/oci-versioned/*) \
 +	$(wildcard $(srcdir)/fuzz/corpus/oci-image/*) \
@@ -291,13 +195,12 @@ new file mode 100644
 index 0000000..0079ab1
 --- /dev/null
 +++ b/fuzz/README.md
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,17 @@
 +# fuzz/ — AFL++ harnesses for Flatpak
 +
-+This directory is built only with `--enable-fuzzing`. See
-+`../../docs/superpowers/specs/2026-05-08-flatpak-aflpp-fuzzing-design.md`
-+for design context, and the "Fuzzing" section of the workspace
-+`../../README.md` for the operational workflow.
++This directory is built only when `--enable-fuzzing` is passed to
++configure. Each `fuzz-*.c` file is a libFuzzer-compatible harness wrapped
++in an AFL++ persistent-mode main; see `fuzz-common.h` for the macro.
 +
 +Layout:
 +
@@ -306,7 +209,10 @@ index 0000000..0079ab1
 +- `corpus/<target>/` — checked-in seed corpus (one minimal seed per
 +  harness).
 +- `dict/*.dict` — AFL++ dictionaries.
-+- `scripts/` — `run.sh`, `cmin.sh`, `triage.sh`, `seed-from-tests.sh`.
++
++Orchestrator scripts (afl-fuzz launchers, corpus minimization, crash
++triage, seed harvest) live in the upper fuzzing system that consumes
++this build, not in this tree.
 diff --git a/fuzz/corpus/filter/seed-1 b/fuzz/corpus/filter/seed-1
 new file mode 100644
 index 0000000..2a7f747
@@ -390,8 +296,11 @@ index 0000000..4a82823
 \ No newline at end of file
 diff --git a/fuzz/corpus/ref/seed-app b/fuzz/corpus/ref/seed-app
 new file mode 100644
-index 0000000..7bfad7b
-Binary files /dev/null and b/fuzz/corpus/ref/seed-app differ
+--- /dev/null
++++ b/fuzz/corpus/ref/seed-app
+@@ -0,0 +1 @@
++app/org.example.Hello/x86_64/stable
+\ No newline at end of file
 diff --git a/fuzz/corpus/ref/seed-col-ref b/fuzz/corpus/ref/seed-col-ref
 new file mode 100644
 index 0000000..0d95491
@@ -410,8 +319,11 @@ index 0000000..ef8e554
 \ No newline at end of file
 diff --git a/fuzz/corpus/ref/seed-runtime b/fuzz/corpus/ref/seed-runtime
 new file mode 100644
-index 0000000..b4bc602
-Binary files /dev/null and b/fuzz/corpus/ref/seed-runtime differ
+--- /dev/null
++++ b/fuzz/corpus/ref/seed-runtime
+@@ -0,0 +1 @@
++runtime/org.freedesktop.Platform/x86_64/22.08
+\ No newline at end of file
 diff --git a/fuzz/corpus/repofile/seed-1 b/fuzz/corpus/repofile/seed-1
 new file mode 100644
 index 0000000..e8bdc0c
@@ -692,7 +604,7 @@ index 0000000..46c0511
 + *
 + * Each harness defines LLVMFuzzerTestOneInput() (libFuzzer-compatible
 + * signature) and uses FUZZ_AFL_PERSISTENT_MAIN() to wrap it in an
-+ * AFL++ persistent-mode main(). Build with afl-clang-fast.
++ * AFL++ persistent-mode main(). Build with afl-gcc-fast or afl-clang-fast.
 + */
 +#ifndef FUZZ_COMMON_H
 +#define FUZZ_COMMON_H
@@ -1162,203 +1074,3 @@ index 0000000..b3e81d4
 +}
 +
 +FUZZ_AFL_PERSISTENT_MAIN (10000)
-diff --git a/fuzz/scripts/cmin.sh b/fuzz/scripts/cmin.sh
-new file mode 100755
-index 0000000..6b3e35e
---- /dev/null
-+++ b/fuzz/scripts/cmin.sh
-@@ -0,0 +1,26 @@
-+#!/usr/bin/env bash
-+# Minimize a fuzz corpus with afl-cmin. Replaces fuzz/corpus/<target>/
-+# with the minimized set, preserving from-tests/ and seed-* files.
-+#
-+# Usage: ./fuzz/scripts/cmin.sh <harness-name>
-+set -euo pipefail
-+
-+if [ $# -lt 1 ]; then
-+  echo "usage: $0 <harness-name>" >&2
-+  exit 2
-+fi
-+
-+harness="${1#fuzz/}"
-+target_short="${harness#fuzz-}"
-+bin="fuzz/${harness}"
-+src="fuzz/corpus/${target_short}"
-+dst="fuzz/corpus/${target_short}.cmin"
-+
-+if [ ! -x "$bin" ]; then echo "$bin not built" >&2; exit 1; fi
-+if [ ! -d "$src" ]; then echo "$src missing" >&2; exit 1; fi
-+
-+rm -rf "$dst"
-+afl-cmin -i "$src" -o "$dst" -t 1000 -m none -- "$bin"
-+echo
-+echo "Minimized into $dst (orig: $(find "$src" -type f | wc -l), min: $(find "$dst" -type f | wc -l))."
-+echo "Apply: rm -rf $src && mv $dst $src"
-diff --git a/fuzz/scripts/run.sh b/fuzz/scripts/run.sh
-new file mode 100755
-index 0000000..409e9d0
---- /dev/null
-+++ b/fuzz/scripts/run.sh
-@@ -0,0 +1,59 @@
-+#!/usr/bin/env bash
-+# Launch a single fuzz harness under afl-fuzz.
-+#
-+# Usage:
-+#   ./fuzz/scripts/run.sh <harness-name> [duration]
-+#   ./fuzz/scripts/run.sh fuzz-metadata
-+#   ./fuzz/scripts/run.sh fuzz-metadata 4h
-+#
-+# Defaults to running until Ctrl-C if no duration is given.
-+set -euo pipefail
-+
-+if [ $# -lt 1 ]; then
-+  echo "usage: $0 <harness-name> [duration]" >&2
-+  echo "  harness-name: one of fuzz-{ref,oci-versioned,oci-image,repofile,filter,metadata,oci-registry-local,smoke}" >&2
-+  exit 2
-+fi
-+
-+harness="$1"
-+duration="${2:-}"
-+
-+# Strip optional fuzz/ prefix.
-+harness="${harness#fuzz/}"
-+
-+bin="fuzz/${harness}"
-+target_short="${harness#fuzz-}"
-+
-+# Map harness name to corpus + dict.
-+corpus="fuzz/corpus/${target_short}"
-+case "$target_short" in
-+  oci-versioned|oci-image|oci-registry-local) dict="fuzz/dict/oci.dict" ;;
-+  repofile|filter|metadata)                   dict="fuzz/dict/keyfile.dict" ;;
-+  ref)                                        dict="fuzz/dict/ref.dict" ;;
-+  *)                                          dict="" ;;
-+esac
-+
-+if [ ! -x "$bin" ]; then
-+  echo "$bin not found or not executable. Run 'make $bin' first." >&2
-+  exit 1
-+fi
-+
-+if [ ! -d "$corpus" ]; then
-+  echo "$corpus not found." >&2
-+  exit 1
-+fi
-+
-+out="fuzz/out/${target_short}"
-+mkdir -p "$out"
-+
-+args=(-i "$corpus" -o "$out" -t 1000 -m none)
-+[ -n "$dict" ] && [ -f "$dict" ] && args+=(-x "$dict")
-+[ -n "$duration" ] && args+=(-V "$duration")
-+
-+# AFL-side env: persistent mode is auto-detected via the binary's symbols.
-+export AFL_AUTORESUME=1
-+export AFL_SKIP_CPUFREQ=1
-+export AFL_DISABLE_TRIM=0
-+
-+echo "Running: afl-fuzz ${args[*]} -- $bin"
-+exec afl-fuzz "${args[@]}" -- "$bin"
-diff --git a/fuzz/scripts/seed-from-tests.sh b/fuzz/scripts/seed-from-tests.sh
-new file mode 100755
-index 0000000..4962d10
---- /dev/null
-+++ b/fuzz/scripts/seed-from-tests.sh
-@@ -0,0 +1,53 @@
-+#!/usr/bin/env bash
-+# Harvest additional fuzz seeds from a previously-run test suite.
-+#
-+# Usage:
-+#   1. Run: TEST_SKIP_CLEANUP=1 make check TESTS=tests/test-oci-registry.sh.test
-+#      (or any subset). The .testtmp dirs under tests/ remain populated.
-+#   2. From the build directory: ./fuzz/scripts/seed-from-tests.sh
-+#
-+# Adds files into fuzz/corpus/<target>/from-tests/ — separate from the
-+# checked-in seeds so users can wipe them without losing the canonical
-+# minimum.
-+set -euo pipefail
-+
-+if [ ! -d tests ]; then
-+  echo "Run from the flatpak-1.12.9 build directory (with tests/)." >&2
-+  exit 2
-+fi
-+
-+CORPUS_ROOT="${CORPUS_ROOT:-fuzz/corpus}"
-+
-+mkdir -p "$CORPUS_ROOT"/{ref,oci-versioned,oci-image,repofile,filter,metadata,oci-registry-local}/from-tests
-+
-+count_before=$(find "$CORPUS_ROOT" -type f -name 'from-tests*' 2>/dev/null | wc -l)
-+
-+# Metadata files from app/runtime test fixtures.
-+find tests -name 'metadata' -type f 2>/dev/null | head -20 | while read -r f; do
-+  dst="$CORPUS_ROOT/metadata/from-tests/$(echo "$f" | tr '/' '_')"
-+  cp -f "$f" "$dst"
-+done
-+
-+# .flatpakrepo files from remote test fixtures.
-+find tests -name '*.flatpakrepo' -type f 2>/dev/null | head -20 | while read -r f; do
-+  dst="$CORPUS_ROOT/repofile/from-tests/$(echo "$f" | tr '/' '_')"
-+  cp -f "$f" "$dst"
-+done
-+
-+# OCI manifests and image configs from the OCI registry test server.
-+find tests -path '*oci*' -name '*.json' -type f 2>/dev/null | head -40 | while read -r f; do
-+  # Heuristic: files mentioning "image.manifest" or "image.index" go to oci-versioned;
-+  # files mentioning "image.config" go to oci-image.
-+  if grep -lq 'image.manifest\|image.index' "$f" 2>/dev/null; then
-+    dst="$CORPUS_ROOT/oci-versioned/from-tests/$(echo "$f" | tr '/' '_')"
-+    # Prepend a selector byte (0x00) so the harness sees the file as input.
-+    { printf '\x00'; cat "$f"; } > "$dst"
-+  elif grep -lq 'image.config\|rootfs' "$f" 2>/dev/null; then
-+    dst="$CORPUS_ROOT/oci-image/from-tests/$(echo "$f" | tr '/' '_')"
-+    cp -f "$f" "$dst"
-+  fi
-+done
-+
-+count_after=$(find "$CORPUS_ROOT" -type f -path '*/from-tests/*' 2>/dev/null | wc -l)
-+added=$((count_after - count_before))
-+echo "Harvested $count_after seeds (+$added new) into $CORPUS_ROOT/*/from-tests/"
-diff --git a/fuzz/scripts/triage.sh b/fuzz/scripts/triage.sh
-new file mode 100755
-index 0000000..fe8c993
---- /dev/null
-+++ b/fuzz/scripts/triage.sh
-@@ -0,0 +1,38 @@
-+#!/usr/bin/env bash
-+# Triage a single AFL crash: minimize with afl-tmin and capture an
-+# ASan-decorated stack trace.
-+#
-+# Usage: ./fuzz/scripts/triage.sh <harness-name> <crash-file>
-+set -euo pipefail
-+
-+if [ $# -lt 2 ]; then
-+  echo "usage: $0 <harness-name> <crash-file>" >&2
-+  exit 2
-+fi
-+
-+harness="${1#fuzz/}"
-+target_short="${harness#fuzz-}"
-+bin="fuzz/${harness}"
-+crash="$2"
-+
-+if [ ! -x "$bin" ]; then echo "$bin not built" >&2; exit 1; fi
-+if [ ! -f "$crash" ]; then echo "$crash missing" >&2; exit 1; fi
-+
-+triage_dir="fuzz/triage/${target_short}/$(basename "$crash")"
-+mkdir -p "$triage_dir"
-+min="$triage_dir/min"
-+log="$triage_dir/asan.log"
-+
-+afl-tmin -i "$crash" -o "$min" -t 5000 -m none -- "$bin"
-+
-+# Re-run under ASan, capturing the abort stack.
-+ASAN_OPTIONS="abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0" \
-+  "$bin" "$min" > "$log" 2>&1 || true
-+
-+echo
-+echo "Triaged: $crash"
-+echo "  Minimized: $min  ($(stat -c%s "$min") bytes)"
-+echo "  ASan log: $log"
-+echo
-+echo "First 40 lines of ASan output:"
-+head -40 "$log" || true

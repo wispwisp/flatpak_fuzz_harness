@@ -43,17 +43,6 @@ BuildRequires:  pkgconfig(polkit-gobject-1)
 BuildRequires:  pkgconfig(xau)
 %if %{with fuzzing}
 BuildRequires:  american-fuzzy-lop
-# clang / compiler-rt / llvm were originally needed for afl-clang-fast.
-# We now use afl-gcc-fast (a GCC plugin) — these are no longer required
-# for the harness build itself but kept until a separate cleanup confirms
-# nothing else in the build pulls them in transitively.
-BuildRequires:  clang
-BuildRequires:  compiler-rt
-BuildRequires:  llvm
-# afl-gcc-fast + AFL_USE_ASAN/UBSAN links -static-libasan / -static-libubsan,
-# which need the static archives Fedora ships in separate subpackages.
-BuildRequires:  libasan-static
-BuildRequires:  libubsan-static
 # autoreconf -fi in %prep needs gtkdocize (GTK_DOC_CHECK is in configure.ac).
 BuildRequires:  gtk-doc
 %endif
@@ -77,9 +66,6 @@ Requires:       ostree-libs%{?_isa} >= %{ostree_version}
 Requires:       (flatpak-selinux = %{?epoch:%{epoch}:}%{version}-%{release} if selinux-policy-targeted)
 Requires:       %{name}-session-helper%{?_isa} = %{?epoch:%{epoch}:}%{version}-%{release}
 Recommends:     p11-kit-server
-%if %{with fuzzing}
-Requires:       american-fuzzy-lop
-%endif
 
 # Make sure the document portal is installed
 %if 0%{?fedora} || 0%{?rhel} > 7
@@ -166,32 +152,39 @@ autoreconf -fi
 
 
 %build
+# AFL toolchain is wired by the rpmbuild-fedora mock config
+# (mock/fedora-43-x86_64-fuzz.cfg), not by this spec. Compiler
+# selection is via PATH-front shims (/opt/afl-shims/{gcc,g++,cc,c++},
+# bind-mounted from the rpmbuild-fedora image) that exec
+# afl-{gcc,g++}-fast; AFL_USE_ASAN=1 / AFL_GCC_DISABLE_VERSION_CHECK=1
+# come from the mock config's environment. CC/CXX are NOT injected.
+# UBSan is intentionally omitted (dropped in phase 2). See
+# docs/superpowers/specs/2026-05-14-compiler-wrapper-design.md and
+# docs/superpowers/specs/2026-05-15-compiler-shim-wrapper-design.md.
 %if %{with fuzzing}
-# AFL env vars must be at script-level scope so they reach both %configure
-# (inside the subshell below) AND %make_build (outside it). AFL_USE_ASAN /
-# AFL_USE_UBSAN tell afl-gcc-fast to inject sanitizer flags on every
-# compile, and AFL_GCC_DISABLE_VERSION_CHECK is needed by the plugin at
-# every compile (not just configure).
-export CC=afl-gcc-fast
-export AFL_USE_ASAN=1
-export AFL_USE_UBSAN=1
-# Fedora ships GCC point updates without rebuilding the AFL package;
-# the plugin then aborts on a datestamp mismatch even though basever
-# matches. Plugin ABI is stable across point releases — bypass is safe.
-export AFL_GCC_DISABLE_VERSION_CHECK=1
-# Strip -flto / -ffat-lto-objects from CFLAGS. AFL-instrumented binaries
-# don't meaningfully benefit from LTO inlining (the AFL pass dominates
-# exec cost), and afl-gcc-fast + ASan + UBSan + LTO together exhaust
-# memory on typical build hosts, causing silent build-time thrash.
+# Strip -flto* / -ffat-lto-objects from %optflags here in the spec —
+# mock's config_opts['macros']['%optflags'] is not pre-populated at
+# config-eval time, so the strip cannot be done in the mock config.
+# afl-gcc-fast + ASan + LTO together exhaust memory on typical build
+# hosts; LTO does not meaningfully help instrumented binaries.
 export CFLAGS="$(echo "%{optflags}" | sed -E 's/-flto[^ ]*//g; s/-ffat-lto-objects//g; s/ +/ /g')"
 %endif
 (if ! test -x configure; then NOCONFIGURE=1 ./autogen.sh; CONFIGFLAGS=--enable-gtk-doc; fi;
  # Generate consistent IDs between runs to avoid multilib problems.
  export XMLTO_FLAGS="--stringparam generate.consistent.ids=1"
 %if %{with fuzzing}
- # g-ir-scanner's probe binary fails to resolve auto-generated
- # *_get_type / *_quark symbols when linking against an AFL-instrumented
- # libflatpak. Fuzz harnesses don't use introspection — disable it.
+ # AFL-instrumented libflatpak.la exposes a same-root-cause family of
+ # link-time failures for any consumer binary that imports its
+ # auto-generated *_get_type / *_quark / public ref helpers: the
+ # g-ir-scanner probe (introspection), test-libflatpak, and the
+ # installed-tests programs all fail to find those symbols even though
+ # they exist at runtime. We disable each consumer one way or another:
+ #   * --disable-introspection here, plus %if !%{with fuzzing} guards on
+ #     gir/typelib entries in %files below;
+ #   * --disable-installed-tests below, plus %if !%{with fuzzing} guard
+ #     on %package tests / %files tests;
+ #   * a sed below that drops test-libflatpak from noinst_PROGRAMS.
+ # If/when the underlying visibility issue is fixed, all four go.
  CONFIGFLAGS="$CONFIGFLAGS --enable-fuzzing --disable-introspection"
 %endif
  %configure \
@@ -230,7 +223,7 @@ install -D -t %{buildroot}%{_unitdir} %{SOURCE1}
 %endif
 
 %if %{with fuzzing}
-install -d %{buildroot}%{_libexecdir}/flatpak/fuzz/{corpus,dict,scripts}
+install -d %{buildroot}%{_libexecdir}/flatpak/fuzz/{corpus,dict}
 install -m 0755 fuzz/fuzz-ref            %{buildroot}%{_libexecdir}/flatpak/fuzz/
 install -m 0755 fuzz/fuzz-oci-versioned  %{buildroot}%{_libexecdir}/flatpak/fuzz/
 install -m 0755 fuzz/fuzz-oci-image      %{buildroot}%{_libexecdir}/flatpak/fuzz/
@@ -241,7 +234,6 @@ install -m 0755 fuzz/fuzz-oci-registry-local %{buildroot}%{_libexecdir}/flatpak/
 install -m 0755 fuzz/fuzz-smoke          %{buildroot}%{_libexecdir}/flatpak/fuzz/
 cp -a fuzz/corpus/* %{buildroot}%{_libexecdir}/flatpak/fuzz/corpus/
 cp -a fuzz/dict/*   %{buildroot}%{_libexecdir}/flatpak/fuzz/dict/
-install -m 0755 fuzz/scripts/*.sh        %{buildroot}%{_libexecdir}/flatpak/fuzz/scripts/
 %endif
 
 %find_lang %{name}
