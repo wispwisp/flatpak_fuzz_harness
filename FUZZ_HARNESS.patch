@@ -11,18 +11,19 @@ index 806984a..f9622c1 100644
  if !WITH_SYSTEM_DBUS_PROXY
  libexec_PROGRAMS+=flatpak-dbus-proxy
 diff --git a/configure.ac b/configure.ac
-index 3b85a03..2bef299 100644
+index 3b85a03..0abf871 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -373,6 +373,24 @@ AC_ARG_ENABLE(asan,
+@@ -373,6 +373,26 @@ AC_ARG_ENABLE(asan,
                [enable_asan=no])
  AM_CONDITIONAL([ENABLE_ASAN], [test "x$enable_asan" = xyes])
  
 +AC_ARG_ENABLE([fuzzing],
 +              [AS_HELP_STRING([--enable-fuzzing],
-+                              [Build AFL++ fuzzing harnesses (requires an AFL++ compiler, e.g. CC=afl-gcc-fast)])],
++                              [Build the fuzzing harnesses; with an AFL++ compiler (CC=afl-gcc-fast/afl-clang-fast) they use AFL++ persistent mode, otherwise single-shot reproducers])],
 +              [],
 +              [enable_fuzzing=no])
++have_afl_compiler=no
 +if test "x$enable_fuzzing" = xyes ; then
 +   AC_MSG_CHECKING([whether $CC is an AFL++ compiler])
 +   AC_PREPROC_IFELSE([AC_LANG_SOURCE([[
@@ -30,20 +31,22 @@ index 3b85a03..2bef299 100644
 +#error not an AFL compiler
 +#endif
 +   ]])],
-+   [AC_MSG_RESULT([yes])],
++   [AC_MSG_RESULT([yes])
++    have_afl_compiler=yes],
 +   [AC_MSG_RESULT([no])
-+    AC_MSG_ERROR([--enable-fuzzing requires an AFL++ compiler (CC=afl-gcc-fast or CC=afl-clang-fast). Re-run configure with CC set appropriately.])])
++    AC_MSG_WARN([--enable-fuzzing: $CC is not an AFL++ compiler; building single-shot reproducer harnesses only. For coverage-guided fuzzing re-run configure with CC=afl-gcc-fast or CC=afl-clang-fast.])])
 +fi
 +AM_CONDITIONAL([ENABLE_FUZZING], [test "x$enable_fuzzing" = xyes])
 +
  AC_ARG_WITH(system-install-dir,
             [AS_HELP_STRING([--with-system-install-dir=DIR],
                             [Location of system installation [LOCALSTATEDIR/lib/flatpak]])],
-@@ -615,4 +633,5 @@ echo "          Use libsystemd:         $have_libsystemd"
+@@ -615,4 +635,6 @@ echo "          Use libsystemd:         $have_libsystemd"
  echo "          Use libmalcontent:      $have_libmalcontent"
  echo "          Use libzstd:            $have_zstd"
  echo "          Use auto sideloading:   $enable_auto_sideloading"
 +echo "          Fuzzing enabled:        $enable_fuzzing"
++echo "          AFL++ compiler:         $have_afl_compiler"
  echo ""
 diff --git a/fuzz/Makefile.am.inc b/fuzz/Makefile.am.inc
 new file mode 100644
@@ -200,7 +203,7 @@ index 0000000..0079ab1
 +
 +This directory is built only when `--enable-fuzzing` is passed to
 +configure. Each `fuzz-*.c` file is a libFuzzer-compatible harness wrapped
-+in an AFL++ persistent-mode main; see `fuzz-common.h` for the macro.
++in an AFL++ persistent-mode main, or a single-shot reproducer without AFL.
 +
 +Layout:
 +
